@@ -1,0 +1,17 @@
+[Unit]
+Description=RTC Incident Report Bot
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rtc_incident_bot
+EnvironmentFile=/home/ubuntu/rtc_incident_bot/.env
+ExecStart=/home/ubuntu/rtc_incident_bot/venv/bin/python incident_bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
