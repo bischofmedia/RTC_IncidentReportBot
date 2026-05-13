@@ -179,15 +179,15 @@ def build_embed_summary(
     psn_name: str, grid_name: str, reported_psn: str, lap: int, description: str
 ) -> discord.Embed:
     embed = discord.Embed(title="🚨 Incident Meldung – Zusammenfassung", color=discord.Color.orange())
-    embed.add_field(name="Meldender", value=psn_name, inline=True)
-    embed.add_field(name="Grid", value=grid_name, inline=True)
-    embed.add_field(name="Gemeldeter Fahrer", value=reported_psn, inline=True)
-    embed.add_field(name="Runde", value=str(lap), inline=True)
-    embed.add_field(name="Schilderung", value=description, inline=False)
-    embed.set_footer(
-        text="Möchtest Du diese Meldung an die Stewards weiterleiten? "
-             "Klicke auf 'Abschicken'. "
-             "Du kannst diese Nachricht auch einfach schließen, wenn Du die Meldung doch nicht einreichen möchtest."
+    embed.description = (
+        f"**Meldender:** {psn_name}\n"
+        f"**Grid:** {grid_name}\n"
+        f"**Gemeldeter Fahrer:** {reported_psn}\n"
+        f"**Runde:** {lap}\n\n"
+        f"**Schilderung:**\n{description}\n\n"
+        f"*Möchtest Du diese Meldung an die Stewards weiterleiten? "
+        f"Klicke auf **Abschicken**. "
+        f"Du kannst diese Nachricht auch einfach schließen, wenn Du die Meldung doch nicht einreichen möchtest.*"
     )
     return embed
 

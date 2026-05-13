@@ -131,8 +131,9 @@ def write_incident(
     description: str,
 ) -> bool:
     """
-    Schreibt einen Incident ins Sheet.
-    Gibt True bei Erfolg zurück.
+    Schreibt einen Incident ins Sheet (Blatt 'Formularantworten').
+    Spalten: A=Zeitstempel, B=leer, C=PSN Meldender, D=RaceNumber,
+             E=GridNumber, F=Lap, G=Opponent, H=Beschreibung
     Wenn DISABLE_SHEET_WRITE=true, wird nur geloggt.
     """
     if os.getenv("DISABLE_SHEET_WRITE", "false").lower() == "true":
@@ -145,39 +146,39 @@ def write_incident(
 
     try:
         sheet_id = os.getenv("INCIDENT_SHEET_ID")
-        tab = str(race_number)
+        tab = "Formularantworten"
         svc = _get_service()
 
-        incident_number = get_incident_count(race_number) + 1
-        row = get_next_incident_row(race_number)
+        # Nächste freie Zeile ermitteln (ab Zeile 2, Zeile 1 = Header)
+        result = svc.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f"'{tab}'!A:A"
+        ).execute()
+        values_col = result.get("values", [])
+        next_row = max(2, len(values_col) + 1)
 
-        # Zusammenfassungsstring: "12.3.1 – Race 12 – Daytona – Grid 3 – Lap 1 – Gemeldeter vs. Meldender"
-        summary = (
-            f"{race_number}.{grid_name}.{incident_number} – "
-            f"Race {race_number} – {track_name} – "
-            f"Grid {grid_name} – Lap {lap} – "
-            f"{reported_psn} vs. {reporter_psn}"
-        )
+        from datetime import datetime as dt
+        timestamp = dt.now().strftime("%d.%m.%Y %H:%M:%S")
 
         values = [[
-            "",             # A – leer
-            incident_number,  # B – Meldungsnummer
-            grid_name,      # C – Grid
-            lap,            # D – Runde
-            reporter_psn,   # E – Meldender
-            reported_psn,   # F – Gemeldeter
-            description,    # G – Beschreibung
-            summary,        # H – Zusammenfassungsstring
+            timestamp,      # A – Zeitstempel
+            "",             # B – leer
+            reporter_psn,   # C – PSN Meldender
+            race_number,    # D – RaceNumber
+            grid_name,      # E – GridNumber
+            str(lap),       # F – Lap
+            reported_psn,   # G – Opponent
+            description,    # H – Beschreibung
         ]]
 
         svc.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"'{tab}'!A{row}",
+            range=f"'{tab}'!A{next_row}",
             valueInputOption="USER_ENTERED",
             body={"values": values},
         ).execute()
 
-        logger.info(f"Incident {summary} in Sheet eingetragen (Zeile {row}).")
+        logger.info(f"Incident in Sheet eingetragen (Zeile {next_row}): {reporter_psn} meldet {reported_psn}, Rennen {race_number}, Grid {grid_name}, Runde {lap}.")
         return True
 
     except Exception as e:
