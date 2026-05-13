@@ -4,19 +4,21 @@ db.py – Datenbankzugriff für den RTC_IncidentReportBot
 
 import os
 import logging
-import mariadb
+import pymysql
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 
 def get_connection():
-    return mariadb.connect(
+    return pymysql.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=int(os.getenv("DB_PORT", 3306)),
         database=os.getenv("DB_NAME"),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
+        cursorclass=pymysql.cursors.DictCursor,
+        charset="utf8mb4",
     )
 
 
@@ -24,7 +26,7 @@ def get_connection():
 def db_cursor():
     conn = get_connection()
     try:
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor()
         yield cur
         conn.commit()
     except Exception:
@@ -38,19 +40,18 @@ def db_cursor():
 
 def get_race_for_date(race_date) -> dict | None:
     """
-    Gibt das Rennen für ein bestimmtes Datum zurück, sofern track_id nicht NULL ist
+    Gibt das Rennen für ein bestimmtes Datum zurück, sofern is_pause=0
     und die aktive Season kein Fun-Event ist.
     Gibt None zurück, wenn kein (wertbares) Rennen stattfindet.
     """
     with db_cursor() as cur:
         cur.execute("""
-            SELECT rc.race_id, rc.race_number, rc.race_date, rc.track_id,
-                   rc.laps, t.name AS track_name, s.fun_event
+            SELECT rc.id AS race_id, rc.race_number, rc.race_date,
+                   rc.track_name, rc.laps, s.fun_event
             FROM race_calendar rc
             JOIN seasons s ON s.is_active = 1
-            LEFT JOIN tracks t ON t.track_id = rc.track_id
-            WHERE rc.race_date = ?
-              AND rc.track_id IS NOT NULL
+            WHERE rc.race_date = %s
+              AND rc.is_pause = 0
               AND s.fun_event = 0
         """, (race_date,))
         return cur.fetchone()
