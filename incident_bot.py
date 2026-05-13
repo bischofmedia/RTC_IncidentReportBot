@@ -41,9 +41,9 @@ intents.members = True
 bot = discord.Client(intents=intents)
 
 # Globaler State
-_current_race: dict | None = None          # Rennen des aktuellen Montags
-_report_open: bool = False                 # Ist das Meldefenster aktiv?
-_results_found: bool = False               # Wurden Ergebnisse gefunden?
+_current_race: dict | None = None
+_report_open: bool = False
+_results_found: bool = False
 
 
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
@@ -63,17 +63,27 @@ async def clear_channel(channel: discord.TextChannel):
 
 
 def get_monday_date() -> date:
-    """
-    Gibt das Datum des relevanten Montags zurück.
-    Wenn heute Montag → heute.
-    Wenn heute Dienstag (und vor 01:00) → gestern.
-    """
     now = datetime.now()
-    weekday = now.weekday()  # 0=Mo, 1=Di
+    weekday = now.weekday()
     if weekday == 0:
         return now.date()
     elif weekday == 1 and now.hour < 1:
         return (now - timedelta(days=1)).date()
+    return None
+
+
+def resolve_monday_for_window() -> date | None:
+    """Gibt das Montags-Datum zurück wenn wir im Meldefenster sind, sonst None."""
+    now = datetime.now()
+    wd = now.weekday()
+    if wd == 0 and now.hour >= 22:
+        return now.date()
+    elif wd == 1:
+        return (now - timedelta(days=1)).date()
+    elif wd == 2:
+        return (now - timedelta(days=2)).date()
+    elif wd == 3 and now.hour == 0:
+        return (now - timedelta(days=3)).date()
     return None
 
 
@@ -101,7 +111,8 @@ class ReportStartView(discord.ui.View):
         discord_id = str(interaction.user.id)
         discord_nick = interaction.user.display_name
 
-        # Grid ermitteln
+        logger.info(f"Button geklickt: user={interaction.user}, discord_id={discord_id}, race_id={race_id}")
+
         grid = db.get_driver_grid_for_race(race_id, discord_id, discord_nick)
         if not grid:
             await interaction.response.send_message(
@@ -111,13 +122,9 @@ class ReportStartView(discord.ui.View):
             )
             return
 
-        # PSN-Name ermitteln
         psn_name = db.get_psn_name(discord_id, discord_nick) or discord_nick
-
-        # Fahrer im gleichen Grid
         drivers = db.get_drivers_in_grid(race_id, grid["grid_id"])
         other_drivers = [d for d in drivers if str(d.get("discord_id", "")) != discord_id]
-
         laps = _current_race.get("laps", 0)
 
         view = DriverSelectView(
@@ -135,10 +142,7 @@ class ReportStartView(discord.ui.View):
 # ─── Mehrstufige Ephemeral-Flows ──────────────────────────────────────────────
 
 def build_embed_step1(psn_name: str, grid_name: str) -> discord.Embed:
-    embed = discord.Embed(
-        title="🚨 Incident Meldung",
-        color=discord.Color.red()
-    )
+    embed = discord.Embed(title="🚨 Incident Meldung", color=discord.Color.red())
     embed.description = (
         f"Hallo **{psn_name}**, ich bedaure, dass es in Deinem Rennen einen Vorfall "
         f"gegeben hat, den Du melden möchtest. Du bist in **Grid {grid_name}** gestartet.\n\n"
@@ -189,8 +193,6 @@ def build_embed_summary(
 
 
 class DriverSelectView(discord.ui.View):
-    """Schritt 1: Fahrer auswählen."""
-
     def __init__(self, psn_name, grid_name, other_drivers, laps, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
@@ -201,7 +203,7 @@ class DriverSelectView(discord.ui.View):
 
         options = [
             discord.SelectOption(label=d["psn_name"], value=d["psn_name"])
-            for d in other_drivers[:25]  # Discord-Limit
+            for d in other_drivers[:25]
         ]
         select = discord.ui.Select(
             placeholder="Fahrer auswählen …",
@@ -227,8 +229,6 @@ class DriverSelectView(discord.ui.View):
 
 
 class LapInputView(discord.ui.View):
-    """Schritt 2: Runde eingeben via Modal."""
-
     def __init__(self, psn_name, grid_name, reported_psn, laps, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
@@ -268,13 +268,10 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
     async def on_submit(self, interaction: discord.Interaction):
         raw = self.lap_input.value.strip()
 
-        # Validierung
         if not raw.isdigit():
             error_embed = build_embed_step2(self.psn_name, self.grid_name, self.reported_psn)
             error_embed.set_footer(text=f"❌ '{raw}' ist keine gültige Zahl. Bitte erneut versuchen.")
-            view = LapInputView(
-                self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race
-            )
+            view = LapInputView(self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race)
             await interaction.response.edit_message(embed=error_embed, view=view)
             return
 
@@ -284,13 +281,10 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
             error_embed.set_footer(
                 text=f"❌ Runde {lap} existiert nicht (Rennen hat {self.laps} Runden). Bitte erneut versuchen."
             )
-            view = LapInputView(
-                self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race
-            )
+            view = LapInputView(self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race)
             await interaction.response.edit_message(embed=error_embed, view=view)
             return
 
-        # Weiter zu Schritt 3
         embed = build_embed_step3(self.psn_name, self.grid_name, self.reported_psn, lap)
         view = DescriptionInputView(
             psn_name=self.psn_name,
@@ -303,8 +297,6 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
 
 
 class DescriptionInputView(discord.ui.View):
-    """Schritt 3: Freitext via Modal."""
-
     def __init__(self, psn_name, grid_name, reported_psn, lap, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
@@ -344,9 +336,7 @@ class DescriptionModal(discord.ui.Modal, title="Schilderung des Vorfalls"):
 
     async def on_submit(self, interaction: discord.Interaction):
         description = self.description_input.value.strip()
-        embed = build_embed_summary(
-            self.psn_name, self.grid_name, self.reported_psn, self.lap, description
-        )
+        embed = build_embed_summary(self.psn_name, self.grid_name, self.reported_psn, self.lap, description)
         view = ConfirmView(
             psn_name=self.psn_name,
             grid_name=self.grid_name,
@@ -359,8 +349,6 @@ class DescriptionModal(discord.ui.Modal, title="Schilderung des Vorfalls"):
 
 
 class ConfirmView(discord.ui.View):
-    """Schritt 4: Bestätigen und abschicken."""
-
     def __init__(self, psn_name, grid_name, reported_psn, lap, description, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
@@ -407,19 +395,17 @@ class ConfirmView(discord.ui.View):
 
 @tasks.loop(minutes=5)
 async def check_results_loop():
-    """Läuft ab Montag 22:00 bis Dienstag 01:00, prüft Ergebnisse alle 5 Minuten."""
     global _current_race, _report_open, _results_found
 
     if _report_open:
-        return  # Meldefenster ist schon offen, nichts mehr tun
+        return
 
     now = datetime.now()
     monday_date = get_monday_date()
 
     if monday_date is None:
-        return  # Falscher Wochentag
+        return
 
-    # Kein Rennen oder Fun-Event?
     race = db.get_race_for_date(monday_date)
     if not race:
         logger.debug(f"Kein (wertbares) Rennen am {monday_date}, überspringe.")
@@ -428,14 +414,12 @@ async def check_results_loop():
 
     _current_race = race
 
-    # 01:00 Uhr Limit
     if now.weekday() == 1 and now.hour >= 1:
-        logger.warning("01:00 Uhr erreicht, Meldefenster wird trotzdem geöffnet (Ergebnisse ggf. fehlend).")
+        logger.warning("01:00 Uhr erreicht, Meldefenster wird trotzdem geöffnet.")
         await open_report_window(results_found=False)
         check_results_loop.stop()
         return
 
-    # Ergebnisse prüfen
     try:
         grid_count = sheets.get_grid_count()
         complete = sheets.check_results_complete(race["race_number"], grid_count)
@@ -451,7 +435,6 @@ async def check_results_loop():
 
 @tasks.loop(minutes=1)
 async def scheduler_monday():
-    """Startet den Ergebnis-Check-Loop jeden Montag um 22:00 Uhr."""
     now = datetime.now()
     if now.weekday() == 0 and now.hour == 22 and now.minute == 0:
         logger.info("Montag 22:00 – starte Ergebnis-Check-Loop.")
@@ -461,9 +444,7 @@ async def scheduler_monday():
 
 @tasks.loop(minutes=1)
 async def scheduler_thursday():
-    """Schließt das Meldefenster jeden Donnerstag um 00:00 Uhr."""
     global _report_open, _current_race
-
     now = datetime.now()
     if now.weekday() == 3 and now.hour == 0 and now.minute == 0:
         if not _report_open:
@@ -473,7 +454,6 @@ async def scheduler_thursday():
 
 
 async def open_report_window(results_found: bool):
-    """Leert den Channel und postet die Startmeldung mit Melden-Button."""
     global _report_open
 
     channel = get_incident_channel()
@@ -503,7 +483,6 @@ async def open_report_window(results_found: bool):
 
 
 async def close_report_window():
-    """Leert den Channel und postet die Abschlussmeldung."""
     global _report_open
 
     channel = get_incident_channel()
@@ -529,7 +508,6 @@ async def close_report_window():
 # ─── Startup Check ────────────────────────────────────────────────────────────
 
 async def get_last_bot_message(channel: discord.TextChannel) -> discord.Message | None:
-    """Gibt die letzte Nachricht des Bots im Channel zurück, oder None."""
     async for msg in channel.history(limit=10):
         if msg.author == bot.user:
             return msg
@@ -537,54 +515,24 @@ async def get_last_bot_message(channel: discord.TextChannel) -> discord.Message 
 
 
 async def startup_check():
-    """
-    Prüft beim Start des Bots den aktuellen Status und stellt den Channel
-    korrekt ein, ohne bereits korrekte Zustände zu überschreiben.
-    """
     global _current_race, _report_open
 
-    await asyncio.sleep(2)  # Kurz warten bis Channel-Cache bereit ist
+    await asyncio.sleep(2)
 
     channel = get_incident_channel()
     if not channel:
         logger.error("Startup-Check: CHAN_INCIDENT nicht gefunden!")
         return
 
-    now = datetime.now()
-    weekday = now.weekday()  # 0=Mo, 1=Di, 2=Mi, 3=Do, 4=Fr, 5=Sa, 6=So
+    monday_date = resolve_monday_for_window()
+    in_window = monday_date is not None
 
-    # Relevantes Montags-Datum ermitteln
-    # Meldefenster läuft von Mo 22:00 bis Do 00:00
-    # Mo=0, Di=1, Mi=2, Do=3 (vor 00:00 ist noch Mi)
-    in_window = False
-    monday_date = None
-
-    if weekday == 0 and now.hour >= 22:
-        # Montag nach 22:00 – Renntag
-        in_window = True
-        monday_date = now.date()
-    elif weekday == 1:
-        # Dienstag
-        in_window = True
-        monday_date = (now - timedelta(days=1)).date()
-    elif weekday == 2:
-        # Mittwoch
-        in_window = True
-        monday_date = (now - timedelta(days=2)).date()
-    elif weekday == 3 and now.hour == 0 and now.minute == 0:
-        # Genau Donnerstag 00:00 – Fenster schließen (wird vom Scheduler gemacht)
-        in_window = False
-    elif weekday == 3 and now.hour == 0:
-        # Donnerstag kurz nach Mitternacht – Fenster gerade geschlossen
-        in_window = False
-
-    logger.info(f"Startup-Check: weekday={weekday}, hour={now.hour}, in_window={in_window}, monday_date={monday_date}")
+    logger.info(f"Startup-Check: in_window={in_window}, monday_date={monday_date}")
 
     if not in_window:
         logger.info("Startup-Check: Außerhalb des Meldefensters, nichts zu tun.")
         return
 
-    # Rennen prüfen
     race = db.get_race_for_date(monday_date)
     if not race:
         logger.info(f"Startup-Check: Kein (wertbares) Rennen am {monday_date}.")
@@ -593,10 +541,8 @@ async def startup_check():
     _current_race = race
     logger.info(f"Startup-Check: Rennen gefunden – {race['race_number']} auf {race['track_name']}")
 
-    # Letzte Bot-Nachricht im Channel prüfen
     last_msg = await get_last_bot_message(channel)
 
-    # Ist die Startmeldung bereits korrekt gepostet?
     if last_msg and last_msg.embeds:
         title = last_msg.embeds[0].title or ""
         if "Incident-Meldung geöffnet" in title:
@@ -607,7 +553,6 @@ async def startup_check():
             logger.info("Startup-Check: Abschlussmeldung bereits im Channel, nichts zu tun.")
             return
 
-    # Noch keine passende Nachricht – Ergebnisse prüfen und Fenster öffnen
     logger.info("Startup-Check: Keine passende Nachricht im Channel, prüfe Ergebnisse.")
     try:
         grid_count = sheets.get_grid_count()
@@ -618,7 +563,6 @@ async def startup_check():
 
     await open_report_window(results_found=complete)
 
-    # Falls Ergebnisse noch fehlen, Check-Loop starten
     if not complete and not check_results_loop.is_running():
         logger.info("Startup-Check: Ergebnisse unvollständig, starte Check-Loop.")
         check_results_loop.start()
@@ -628,6 +572,7 @@ async def startup_check():
 
 @bot.event
 async def on_ready():
+    global _current_race
     logger.info(f"Bot eingeloggt als {bot.user} (ID: {bot.user.id})")
 
     # Persistent View registrieren
@@ -640,6 +585,17 @@ async def on_ready():
         scheduler_thursday.start()
 
     logger.info("Scheduler gestartet.")
+
+    # _current_race sofort setzen damit Button-Handler nicht an None scheitert
+    monday_date = resolve_monday_for_window()
+    if monday_date:
+        try:
+            race = db.get_race_for_date(monday_date)
+            if race:
+                _current_race = race
+                logger.info(f"on_ready: _current_race = Rennen {race['race_number']} auf {race['track_name']}")
+        except Exception as e:
+            logger.error(f"on_ready: Fehler beim Laden des Rennens: {e}")
 
     # Startup-Check asynchron starten
     bot.loop.create_task(startup_check())
