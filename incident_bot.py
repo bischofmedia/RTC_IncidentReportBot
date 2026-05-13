@@ -360,6 +360,9 @@ class ConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Abschicken", style=discord.ButtonStyle.success)
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Zuerst defer – gibt uns mehr Zeit für den Sheet-API-Call
+        await interaction.response.defer()
+
         success = sheets.write_incident(
             race_number=self.race["race_number"],
             race_name=f"Race {self.race['race_number']}",
@@ -388,7 +391,7 @@ class ConfirmView(discord.ui.View):
                 color=discord.Color.red()
             )
 
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 # ─── Zeitgesteuerte Tasks ─────────────────────────────────────────────────────
