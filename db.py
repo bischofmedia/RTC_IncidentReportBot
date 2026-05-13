@@ -64,7 +64,19 @@ def get_driver_grid_for_race(race_id: int, discord_id: str, discord_nick: str) -
     Ermittelt das Grid eines Fahrers anhand seiner Discord-ID (Fallback: Nickname).
     Gibt dict mit grid_id, grid_name zurück oder None.
     """
+    logger.info(f"get_driver_grid_for_race: race_id={race_id!r}, discord_id={discord_id!r}, discord_nick={discord_nick!r}")
     with db_cursor() as cur:
+        # Debug: alle Fahrer in diesem Rennen
+        cur.execute("""
+            SELECT d.driver_id, d.psn_name, d.discord_id, d.discord_name, rr.grid_id
+            FROM race_results rr
+            JOIN drivers d ON d.driver_id = rr.driver_id
+            JOIN grids g ON g.grid_id = rr.grid_id
+            WHERE g.race_id = %s
+        """, (race_id,))
+        all_drivers = cur.fetchall()
+        logger.info(f"Fahrer in race_id={race_id}: {all_drivers}")
+
         # Versuch 1: Discord ID
         cur.execute("""
             SELECT g.grid_id, g.grid_label AS grid_name
@@ -76,6 +88,7 @@ def get_driver_grid_for_race(race_id: int, discord_id: str, discord_nick: str) -
             LIMIT 1
         """, (race_id, discord_id))
         row = cur.fetchone()
+        logger.info(f"Treffer discord_id={discord_id!r}: {row}")
         if row:
             return row
 
@@ -89,7 +102,9 @@ def get_driver_grid_for_race(race_id: int, discord_id: str, discord_nick: str) -
               AND d.discord_name = %s
             LIMIT 1
         """, (race_id, discord_nick))
-        return cur.fetchone()
+        row = cur.fetchone()
+        logger.info(f"Treffer discord_nick={discord_nick!r}: {row}")
+        return row
 
 
 def get_drivers_in_grid(race_id: int, grid_id: int) -> list[dict]:
