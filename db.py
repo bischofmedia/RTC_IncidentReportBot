@@ -42,14 +42,15 @@ def get_race_for_date(race_date) -> dict | None:
     """
     Gibt das Rennen für ein bestimmtes Datum zurück, sofern is_pause=0
     und die aktive Season kein Fun-Event ist.
-    Gibt None zurück, wenn kein (wertbares) Rennen stattfindet.
+    Gibt die echte race_id aus der races-Tabelle zurück.
     """
     with db_cursor() as cur:
         cur.execute("""
-            SELECT rc.id AS race_id, rc.race_number, rc.race_date,
+            SELECT r.race_id, rc.race_number, rc.race_date,
                    rc.track_name, rc.laps, s.fun_event
             FROM race_calendar rc
             JOIN seasons s ON s.is_active = 1
+            JOIN races r ON r.race_date = rc.race_date AND r.season_id = s.season_id
             WHERE rc.race_date = %s
               AND rc.is_pause = 0
               AND s.fun_event = 0
