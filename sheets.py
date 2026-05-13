@@ -160,12 +160,23 @@ def write_incident(
         from datetime import datetime as dt
         timestamp = dt.now().strftime("%d.%m.%Y %H:%M:%S")
 
+        # Grid-Name ohne "Grid "-Prefix
+        grid_short = grid_name.replace("Grid ", "").strip()
+
+        # Zusammenfassungsstring
+        summary = (
+            f"{race_number}.{grid_short}.{next_row - 1} – "
+            f"Race {race_number} – {track_name} – "
+            f"Grid {grid_short} – Lap {lap} – "
+            f"{reported_psn} vs. {reporter_psn}"
+        )
+
         values = [[
             timestamp,      # A – Zeitstempel
-            "",             # B – leer
+            summary,        # B – Zusammenfassungsstring
             reporter_psn,   # C – PSN Meldender
             race_number,    # D – RaceNumber
-            grid_name,      # E – GridNumber
+            grid_short,     # E – GridNumber (nur z.B. "2b")
             str(lap),       # F – Lap
             reported_psn,   # G – Opponent
             description,    # H – Beschreibung
