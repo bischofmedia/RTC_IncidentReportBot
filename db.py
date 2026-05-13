@@ -66,12 +66,12 @@ def get_driver_grid_for_race(race_id: int, discord_id: str, discord_nick: str) -
     with db_cursor() as cur:
         # Versuch 1: Discord ID
         cur.execute("""
-            SELECT g.grid_id, g.name AS grid_name
+            SELECT g.grid_id, g.grid_label AS grid_name
             FROM race_results rr
             JOIN grids g ON g.grid_id = rr.grid_id
             JOIN drivers d ON d.driver_id = rr.driver_id
-            WHERE rr.race_id = ?
-              AND d.discord_id = ?
+            WHERE g.race_id = %s
+              AND d.discord_id = %s
             LIMIT 1
         """, (race_id, discord_id))
         row = cur.fetchone()
@@ -80,12 +80,12 @@ def get_driver_grid_for_race(race_id: int, discord_id: str, discord_nick: str) -
 
         # Fallback: Discord-Nickname
         cur.execute("""
-            SELECT g.grid_id, g.name AS grid_name
+            SELECT g.grid_id, g.grid_label AS grid_name
             FROM race_results rr
             JOIN grids g ON g.grid_id = rr.grid_id
             JOIN drivers d ON d.driver_id = rr.driver_id
-            WHERE rr.race_id = ?
-              AND d.discord_name = ?
+            WHERE g.race_id = %s
+              AND d.discord_name = %s
             LIMIT 1
         """, (race_id, discord_nick))
         return cur.fetchone()
@@ -101,9 +101,9 @@ def get_drivers_in_grid(race_id: int, grid_id: int) -> list[dict]:
             SELECT d.driver_id, d.psn_name
             FROM race_results rr
             JOIN drivers d ON d.driver_id = rr.driver_id
-            WHERE rr.race_id = ?
-              AND rr.grid_id = ?
-            ORDER BY rr.finish_position
+            WHERE rr.race_id = %s
+              AND rr.grid_id = %s
+            ORDER BY rr.finish_pos_grid
         """, (race_id, grid_id))
         return cur.fetchall()
 
@@ -112,7 +112,7 @@ def get_psn_name(discord_id: str, discord_nick: str) -> str | None:
     """Gibt den PSN-Namen eines Fahrers zurück."""
     with db_cursor() as cur:
         cur.execute(
-            "SELECT psn_name FROM drivers WHERE discord_id = ? LIMIT 1",
+            "SELECT psn_name FROM drivers WHERE discord_id = %s LIMIT 1",
             (discord_id,)
         )
         row = cur.fetchone()
@@ -120,7 +120,7 @@ def get_psn_name(discord_id: str, discord_nick: str) -> str | None:
             return row["psn_name"]
 
         cur.execute(
-            "SELECT psn_name FROM drivers WHERE discord_name = ? LIMIT 1",
+            "SELECT psn_name FROM drivers WHERE discord_name = %s LIMIT 1",
             (discord_nick,)
         )
         row = cur.fetchone()
