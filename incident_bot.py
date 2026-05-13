@@ -123,20 +123,60 @@ class ReportStartView(discord.ui.View):
             return
 
         psn_name = db.get_psn_name(discord_id, discord_nick) or discord_nick
-        drivers = db.get_drivers_in_grid(race_id, grid["grid_id"])
-        other_drivers = [d for d in drivers if str(d.get("discord_id", "")) != discord_id]
         laps = _current_race.get("laps", 0)
 
-        view = DriverSelectView(
-            psn_name=psn_name,
-            grid_name=grid["grid_name"],
-            other_drivers=other_drivers,
-            laps=laps,
-            race=_current_race,
-        )
+        # Discord-ID nachtragen falls nur per Nickname gefunden
+        driver_id = db.get_driver_id(discord_id, discord_nick)
+        if driver_id:
+            db.update_discord_id(discord_nick, discord_id)
 
-        embed = build_embed_step1(psn_name, grid["grid_name"])
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # Team-Check
+        team_members = []
+        if driver_id:
+            team_id = db.get_driver_team_in_race(race_id, driver_id)
+            if team_id:
+                team_members = db.get_team_members_in_race(race_id, team_id, driver_id)
+
+        if team_members:
+            # Erst fragen: für wen wird gemeldet?
+            view = ReporterSelectView(
+                clicker_psn=psn_name,
+                clicker_discord_id=discord_id,
+                team_members=team_members,
+                grid=grid,
+                driver_id=driver_id,
+                laps=laps,
+                race=_current_race,
+            )
+            embed = discord.Embed(
+                title="🚨 Incident Meldung",
+                description=(
+                    f"Hallo **{psn_name}**, für wen möchtest Du den Vorfall melden?
+
+"
+                    f"Du kannst im Namen eines Teammitglieds melden (Drittmeldung)."
+                ),
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            # Direkt zur Fahrerauswahl
+            drivers = db.get_drivers_in_grid(race_id, grid["grid_id"])
+            other_drivers = [d for d in drivers if d["driver_id"] != driver_id]
+            all_grids = db.get_grids_for_race(race_id)
+            other_grids = [g for g in all_grids if g["grid_id"] != grid["grid_id"]]
+
+            view = DriverSelectView(
+                psn_name=psn_name,
+                clicker_psn=psn_name,
+                grid_name=grid["grid_name"],
+                other_drivers=other_drivers,
+                other_grids=other_grids,
+                laps=laps,
+                race=_current_race,
+            )
+            embed = build_embed_step1(psn_name, grid["grid_name"])
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 # ─── Mehrstufige Ephemeral-Flows ──────────────────────────────────────────────
@@ -192,19 +232,180 @@ def build_embed_summary(
     return embed
 
 
-class DriverSelectView(discord.ui.View):
-    def __init__(self, psn_name, grid_name, other_drivers, laps, race):
+class ReporterSelectView(discord.ui.View):
+    """Schritt 0a: Für wen wird gemeldet? (Team-Abfrage)"""
+
+    def __init__(self, clicker_psn, clicker_discord_id, team_members, grid, driver_id, laps, race):
+        super().__init__(timeout=300)
+        self.clicker_psn = clicker_psn
+        self.clicker_discord_id = clicker_discord_id
+        self.team_members = team_members
+        self.grid = grid
+        self.driver_id = driver_id
+        self.laps = laps
+        self.race = race
+
+        options = [discord.SelectOption(label=clicker_psn, value=clicker_psn, description="Ich selbst")]
+        for m in team_members[:24]:
+            options.append(discord.SelectOption(label=m["psn_name"], value=m["psn_name"]))
+
+        select = discord.ui.Select(
+            placeholder="Für wen meldest Du?",
+            options=options,
+            min_values=1,
+            max_values=1,
+            custom_id="incident:reporter_select"
+        )
+        select.callback = self.reporter_selected
+        self.add_item(select)
+
+    async def reporter_selected(self, interaction: discord.Interaction):
+        chosen = interaction.data["values"][0]
+        race_id = self.race["race_id"]
+
+        if chosen == self.clicker_psn:
+            # Meldet für sich selbst
+            reporter_psn = self.clicker_psn
+            clicker_psn = self.clicker_psn
+        else:
+            # Drittmeldung
+            reporter_psn = chosen
+            clicker_psn = self.clicker_psn
+
+        drivers = db.get_drivers_in_grid(race_id, self.grid["grid_id"])
+        # Meldenden Fahrer aus der Liste ausschließen
+        other_drivers = [d for d in drivers if d["psn_name"] != reporter_psn]
+        all_grids = db.get_grids_for_race(race_id)
+        other_grids = [g for g in all_grids if g["grid_id"] != self.grid["grid_id"]]
+
+        view = DriverSelectView(
+            psn_name=reporter_psn,
+            clicker_psn=clicker_psn,
+            grid_name=self.grid["grid_name"],
+            other_drivers=other_drivers,
+            other_grids=other_grids,
+            laps=self.laps,
+            race=self.race,
+        )
+        embed = build_embed_step1(reporter_psn, self.grid["grid_name"])
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class OtherGridSelectView(discord.ui.View):
+    """Schritt 0b: Grid auswählen (anderes Grid)"""
+
+    def __init__(self, psn_name, clicker_psn, grid_name, other_grids, laps, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
-        self.other_drivers = other_drivers
+        self.other_grids = other_grids
+        self.laps = laps
+        self.race = race
+
+        options = [
+            discord.SelectOption(label=g["grid_label"], value=str(g["grid_id"]))
+            for g in other_grids[:25]
+        ]
+        select = discord.ui.Select(
+            placeholder="Grid auswählen …",
+            options=options,
+            min_values=1,
+            max_values=1,
+            custom_id="incident:other_grid_select"
+        )
+        select.callback = self.grid_selected
+        self.add_item(select)
+
+    async def grid_selected(self, interaction: discord.Interaction):
+        grid_id = int(interaction.data["values"][0])
+        race_id = self.race["race_id"]
+
+        # Grid-Label ermitteln
+        grid_label = next((g["grid_label"] for g in self.other_grids if g["grid_id"] == grid_id), str(grid_id))
+
+        # Fahrer aus diesem Grid laden
+        drivers = db.get_drivers_in_grid(race_id, grid_id)
+
+        view = OtherGridDriverSelectView(
+            psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
+            reporter_grid_name=self.grid_name,
+            target_grid_id=grid_id,
+            target_grid_label=grid_label,
+            drivers=drivers,
+            laps=self.laps,
+            race=self.race,
+        )
+        embed = discord.Embed(title="🚨 Incident Meldung", color=discord.Color.red())
+        embed.description = (
+            f"Hallo **{self.psn_name}**, Du bist in **Grid {self.grid_name}** gestartet.\n\n"
+            f"Welchen Fahrer aus **{grid_label}** möchtest Du melden?"
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class OtherGridDriverSelectView(discord.ui.View):
+    """Schritt 0c: Fahrer aus anderem Grid auswählen"""
+
+    def __init__(self, psn_name, clicker_psn, reporter_grid_name, target_grid_id, target_grid_label, drivers, laps, race):
+        super().__init__(timeout=300)
+        self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
+        self.reporter_grid_name = reporter_grid_name
+        self.target_grid_label = target_grid_label
         self.laps = laps
         self.race = race
 
         options = [
             discord.SelectOption(label=d["psn_name"], value=d["psn_name"])
-            for d in other_drivers[:25]
+            for d in drivers[:25]
         ]
+        select = discord.ui.Select(
+            placeholder="Fahrer auswählen …",
+            options=options,
+            min_values=1,
+            max_values=1,
+            custom_id="incident:other_grid_driver_select"
+        )
+        select.callback = self.driver_selected
+        self.add_item(select)
+
+    async def driver_selected(self, interaction: discord.Interaction):
+        reported_psn = interaction.data["values"][0]
+        embed = build_embed_step2(self.psn_name, self.reporter_grid_name, reported_psn)
+        view = LapInputView(
+            psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
+            grid_name=self.reporter_grid_name,
+            reported_psn=reported_psn,
+            laps=self.laps,
+            race=self.race,
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class DriverSelectView(discord.ui.View):
+    def __init__(self, psn_name, clicker_psn, grid_name, other_drivers, other_grids, laps, race):
+        super().__init__(timeout=300)
+        self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
+        self.grid_name = grid_name
+        self.other_drivers = other_drivers
+        self.other_grids = other_grids
+        self.laps = laps
+        self.race = race
+
+        options = [
+            discord.SelectOption(label=d["psn_name"], value=d["psn_name"])
+            for d in other_drivers[:24]
+        ]
+        if other_grids:
+            options.append(discord.SelectOption(
+                label="Fahrer aus anderem Grid …",
+                value="__other_grid__",
+                description="Vorfall mit Fahrer aus einem anderen Grid melden"
+            ))
         select = discord.ui.Select(
             placeholder="Fahrer auswählen …",
             options=options,
@@ -216,10 +417,30 @@ class DriverSelectView(discord.ui.View):
         self.add_item(select)
 
     async def driver_selected(self, interaction: discord.Interaction):
-        reported_psn = interaction.data["values"][0]
+        chosen = interaction.data["values"][0]
+
+        if chosen == "__other_grid__":
+            view = OtherGridSelectView(
+                psn_name=self.psn_name,
+                clicker_psn=self.clicker_psn,
+                grid_name=self.grid_name,
+                other_grids=self.other_grids,
+                laps=self.laps,
+                race=self.race,
+            )
+            embed = discord.Embed(title="🚨 Incident Meldung", color=discord.Color.red())
+            embed.description = (
+                f"Hallo **{self.psn_name}**, Du bist in **Grid {self.grid_name}** gestartet.\n\n"
+                f"**Aus welchem Grid kommt der Fahrer, den Du melden möchtest?**"
+            )
+            await interaction.response.edit_message(embed=embed, view=view)
+            return
+
+        reported_psn = chosen
         embed = build_embed_step2(self.psn_name, self.grid_name, reported_psn)
         view = LapInputView(
             psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
             grid_name=self.grid_name,
             reported_psn=reported_psn,
             laps=self.laps,
@@ -229,9 +450,10 @@ class DriverSelectView(discord.ui.View):
 
 
 class LapInputView(discord.ui.View):
-    def __init__(self, psn_name, grid_name, reported_psn, laps, race):
+    def __init__(self, psn_name, clicker_psn, grid_name, reported_psn, laps, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
         self.reported_psn = reported_psn
         self.laps = laps
@@ -241,6 +463,7 @@ class LapInputView(discord.ui.View):
     async def enter_lap(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = LapModal(
             psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
             grid_name=self.grid_name,
             reported_psn=self.reported_psn,
             laps=self.laps,
@@ -257,9 +480,10 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
         max_length=3,
     )
 
-    def __init__(self, psn_name, grid_name, reported_psn, laps, race):
+    def __init__(self, psn_name, clicker_psn, grid_name, reported_psn, laps, race):
         super().__init__()
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
         self.reported_psn = reported_psn
         self.laps = laps
@@ -271,7 +495,7 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
         if not raw.isdigit():
             error_embed = build_embed_step2(self.psn_name, self.grid_name, self.reported_psn)
             error_embed.set_footer(text=f"❌ '{raw}' ist keine gültige Zahl. Bitte erneut versuchen.")
-            view = LapInputView(self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race)
+            view = LapInputView(self.psn_name, self.clicker_psn, self.grid_name, self.reported_psn, self.laps, self.race)
             await interaction.response.edit_message(embed=error_embed, view=view)
             return
 
@@ -281,13 +505,14 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
             error_embed.set_footer(
                 text=f"❌ Runde {lap} existiert nicht (Rennen hat {self.laps} Runden). Bitte erneut versuchen."
             )
-            view = LapInputView(self.psn_name, self.grid_name, self.reported_psn, self.laps, self.race)
+            view = LapInputView(self.psn_name, self.clicker_psn, self.grid_name, self.reported_psn, self.laps, self.race)
             await interaction.response.edit_message(embed=error_embed, view=view)
             return
 
         embed = build_embed_step3(self.psn_name, self.grid_name, self.reported_psn, lap)
         view = DescriptionInputView(
             psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
             grid_name=self.grid_name,
             reported_psn=self.reported_psn,
             lap=lap,
@@ -297,9 +522,10 @@ class LapModal(discord.ui.Modal, title="Runde des Vorfalls"):
 
 
 class DescriptionInputView(discord.ui.View):
-    def __init__(self, psn_name, grid_name, reported_psn, lap, race):
+    def __init__(self, psn_name, clicker_psn, grid_name, reported_psn, lap, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
         self.reported_psn = reported_psn
         self.lap = lap
@@ -309,6 +535,7 @@ class DescriptionInputView(discord.ui.View):
     async def enter_description(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = DescriptionModal(
             psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
             grid_name=self.grid_name,
             reported_psn=self.reported_psn,
             lap=self.lap,
@@ -326,9 +553,10 @@ class DescriptionModal(discord.ui.Modal, title="Schilderung des Vorfalls"):
         max_length=1000,
     )
 
-    def __init__(self, psn_name, grid_name, reported_psn, lap, race):
+    def __init__(self, psn_name, clicker_psn, grid_name, reported_psn, lap, race):
         super().__init__()
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
         self.reported_psn = reported_psn
         self.lap = lap
@@ -339,6 +567,7 @@ class DescriptionModal(discord.ui.Modal, title="Schilderung des Vorfalls"):
         embed = build_embed_summary(self.psn_name, self.grid_name, self.reported_psn, self.lap, description)
         view = ConfirmView(
             psn_name=self.psn_name,
+            clicker_psn=self.clicker_psn,
             grid_name=self.grid_name,
             reported_psn=self.reported_psn,
             lap=self.lap,
@@ -349,9 +578,10 @@ class DescriptionModal(discord.ui.Modal, title="Schilderung des Vorfalls"):
 
 
 class ConfirmView(discord.ui.View):
-    def __init__(self, psn_name, grid_name, reported_psn, lap, description, race):
+    def __init__(self, psn_name, clicker_psn, grid_name, reported_psn, lap, description, race):
         super().__init__(timeout=300)
         self.psn_name = psn_name
+        self.clicker_psn = clicker_psn
         self.grid_name = grid_name
         self.reported_psn = reported_psn
         self.lap = lap
@@ -363,6 +593,12 @@ class ConfirmView(discord.ui.View):
         # Zuerst defer – gibt uns mehr Zeit für den Sheet-API-Call
         await interaction.response.defer()
 
+        # Drittmeldung: clicker_psn != psn_name
+        if self.clicker_psn != self.psn_name:
+            final_description = f"Drittmeldung von {self.clicker_psn}: {self.description}"
+        else:
+            final_description = self.description
+
         success = sheets.write_incident(
             race_number=self.race["race_number"],
             race_name=f"Race {self.race['race_number']}",
@@ -371,7 +607,7 @@ class ConfirmView(discord.ui.View):
             lap=self.lap,
             reporter_psn=self.psn_name,
             reported_psn=self.reported_psn,
-            description=self.description,
+            description=final_description,
         )
 
         if success:

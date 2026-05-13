@@ -142,3 +142,70 @@ def get_psn_name(discord_id: str, discord_nick: str) -> str | None:
         )
         row = cur.fetchone()
         return row["psn_name"] if row else None
+
+
+def update_discord_id(discord_nick: str, discord_id: str) -> None:
+    """Trägt die Discord-ID nach, wenn nur per Nickname gefunden."""
+    with db_cursor() as cur:
+        cur.execute(
+            "UPDATE drivers SET discord_id = %s WHERE discord_name = %s AND (discord_id IS NULL OR discord_id = '')",
+            (discord_id, discord_nick)
+        )
+        if cur.rowcount:
+            logger.info(f"Discord-ID {discord_id} für {discord_nick} in DB eingetragen.")
+
+
+def get_team_members_in_race(race_id: int, team_id: int, exclude_driver_id: int) -> list[dict]:
+    """Gibt alle anderen Fahrer desselben Teams im Rennen zurück."""
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT d.driver_id, d.psn_name
+            FROM race_results rr
+            JOIN drivers d ON d.driver_id = rr.driver_id
+            WHERE rr.race_id = %s
+              AND rr.team_id = %s
+              AND rr.driver_id != %s
+        """, (race_id, team_id, exclude_driver_id))
+        return cur.fetchall()
+
+
+def get_driver_team_in_race(race_id: int, driver_id: int) -> int | None:
+    """Gibt die team_id des Fahrers in diesem Rennen zurück, oder None."""
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT team_id FROM race_results
+            WHERE race_id = %s AND driver_id = %s
+            LIMIT 1
+        """, (race_id, driver_id))
+        row = cur.fetchone()
+        return row["team_id"] if row else None
+
+
+def get_driver_id(discord_id: str, discord_nick: str) -> int | None:
+    """Gibt die driver_id zurück."""
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT driver_id FROM drivers WHERE discord_id = %s LIMIT 1",
+            (discord_id,)
+        )
+        row = cur.fetchone()
+        if row:
+            return row["driver_id"]
+        cur.execute(
+            "SELECT driver_id FROM drivers WHERE discord_name = %s LIMIT 1",
+            (discord_nick,)
+        )
+        row = cur.fetchone()
+        return row["driver_id"] if row else None
+
+
+def get_grids_for_race(race_id: int) -> list[dict]:
+    """Gibt alle Grids eines Rennens zurück."""
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT grid_id, grid_number, grid_label
+            FROM grids
+            WHERE race_id = %s
+            ORDER BY grid_number
+        """, (race_id,))
+        return cur.fetchall()
