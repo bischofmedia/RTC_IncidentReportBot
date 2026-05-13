@@ -151,9 +151,7 @@ class ReportStartView(discord.ui.View):
             embed = discord.Embed(
                 title="🚨 Incident Meldung",
                 description=(
-                    f"Hallo **{psn_name}**, für wen möchtest Du den Vorfall melden?
-
-"
+                    f"Hallo **{psn_name}**, fuer wen moechtest Du den Vorfall melden?\n\n"
                     f"Du kannst im Namen eines Teammitglieds melden (Drittmeldung)."
                 ),
                 color=discord.Color.red()
