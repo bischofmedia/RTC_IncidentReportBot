@@ -102,7 +102,7 @@ class ReportStartView(discord.ui.View):
     )
     async def start_report(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not _current_race:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Es ist aktuell kein Rennen aktiv.", ephemeral=True
             )
             return
@@ -111,11 +111,13 @@ class ReportStartView(discord.ui.View):
         discord_id = str(interaction.user.id)
         discord_nick = interaction.user.display_name
 
+        await interaction.response.defer(ephemeral=True)
+
         logger.info(f"Button geklickt: user={interaction.user}, discord_id={discord_id}, race_id={race_id}")
 
         grid = db.get_driver_grid_for_race(race_id, discord_id, discord_nick)
         if not grid:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Ich konnte dich keinem Grid zuordnen. "
                 "Bitte stelle sicher, dass deine Discord-ID in der Datenbank hinterlegt ist.",
                 ephemeral=True
@@ -174,7 +176,7 @@ class ReportStartView(discord.ui.View):
                 race=_current_race,
             )
             embed = build_embed_step1(psn_name, grid["grid_name"])
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 # ─── Mehrstufige Ephemeral-Flows ──────────────────────────────────────────────
@@ -265,27 +267,33 @@ class ReporterSelectView(discord.ui.View):
             # Meldet für sich selbst
             reporter_psn = self.clicker_psn
             clicker_psn = self.clicker_psn
+            reporter_grid = self.grid
         else:
-            # Drittmeldung
+            # Drittmeldung – Grid des Teammitglieds per driver_id ermitteln
             reporter_psn = chosen
             clicker_psn = self.clicker_psn
+            member = next((m for m in self.team_members if m["psn_name"] == chosen), None)
+            if member:
+                member_grid = db.get_grid_for_driver_id(race_id, member["driver_id"])
+            else:
+                member_grid = None
+            reporter_grid = member_grid if member_grid else self.grid
 
-        drivers = db.get_drivers_in_grid(race_id, self.grid["grid_id"])
-        # Meldenden Fahrer aus der Liste ausschließen
+        drivers = db.get_drivers_in_grid(race_id, reporter_grid["grid_id"])
         other_drivers = [d for d in drivers if d["psn_name"] != reporter_psn]
         all_grids = db.get_grids_for_race(race_id)
-        other_grids = [g for g in all_grids if g["grid_id"] != self.grid["grid_id"]]
+        other_grids = [g for g in all_grids if g["grid_id"] != reporter_grid["grid_id"]]
 
         view = DriverSelectView(
             psn_name=reporter_psn,
             clicker_psn=clicker_psn,
-            grid_name=self.grid["grid_name"],
+            grid_name=reporter_grid["grid_name"],
             other_drivers=other_drivers,
             other_grids=other_grids,
             laps=self.laps,
             race=self.race,
         )
-        embed = build_embed_step1(reporter_psn, self.grid["grid_name"])
+        embed = build_embed_step1(reporter_psn, reporter_grid["grid_name"])
         await interaction.response.edit_message(embed=embed, view=view)
 
 

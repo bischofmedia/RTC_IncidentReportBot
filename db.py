@@ -209,3 +209,17 @@ def get_grids_for_race(race_id: int) -> list[dict]:
             ORDER BY grid_number
         """, (race_id,))
         return cur.fetchall()
+
+
+def get_grid_for_driver_id(race_id: int, driver_id: int) -> dict | None:
+    """Gibt Grid (grid_id, grid_name) für eine bekannte driver_id zurück."""
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT g.grid_id, g.grid_label AS grid_name
+            FROM race_results rr
+            JOIN grids g ON g.grid_id = rr.grid_id
+            WHERE rr.race_id = %s
+              AND rr.driver_id = %s
+            LIMIT 1
+        """, (race_id, driver_id))
+        return cur.fetchone()
