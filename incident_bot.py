@@ -158,7 +158,7 @@ class ReportStartView(discord.ui.View):
                 ),
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         else:
             # Direkt zur Fahrerauswahl
             drivers = db.get_drivers_in_grid(race_id, grid["grid_id"])
