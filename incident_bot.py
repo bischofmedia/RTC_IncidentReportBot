@@ -526,6 +526,104 @@ async def close_report_window():
     logger.info(f"Meldefenster für Rennen {race['race_number']} geschlossen.")
 
 
+# ─── Startup Check ────────────────────────────────────────────────────────────
+
+async def get_last_bot_message(channel: discord.TextChannel) -> discord.Message | None:
+    """Gibt die letzte Nachricht des Bots im Channel zurück, oder None."""
+    async for msg in channel.history(limit=10):
+        if msg.author == bot.user:
+            return msg
+    return None
+
+
+async def startup_check():
+    """
+    Prüft beim Start des Bots den aktuellen Status und stellt den Channel
+    korrekt ein, ohne bereits korrekte Zustände zu überschreiben.
+    """
+    global _current_race, _report_open
+
+    await asyncio.sleep(2)  # Kurz warten bis Channel-Cache bereit ist
+
+    channel = get_incident_channel()
+    if not channel:
+        logger.error("Startup-Check: CHAN_INCIDENT nicht gefunden!")
+        return
+
+    now = datetime.now()
+    weekday = now.weekday()  # 0=Mo, 1=Di, 2=Mi, 3=Do, 4=Fr, 5=Sa, 6=So
+
+    # Relevantes Montags-Datum ermitteln
+    # Meldefenster läuft von Mo 22:00 bis Do 00:00
+    # Mo=0, Di=1, Mi=2, Do=3 (vor 00:00 ist noch Mi)
+    in_window = False
+    monday_date = None
+
+    if weekday == 0 and now.hour >= 22:
+        # Montag nach 22:00 – Renntag
+        in_window = True
+        monday_date = now.date()
+    elif weekday == 1:
+        # Dienstag
+        in_window = True
+        monday_date = (now - timedelta(days=1)).date()
+    elif weekday == 2:
+        # Mittwoch
+        in_window = True
+        monday_date = (now - timedelta(days=2)).date()
+    elif weekday == 3 and now.hour == 0 and now.minute == 0:
+        # Genau Donnerstag 00:00 – Fenster schließen (wird vom Scheduler gemacht)
+        in_window = False
+    elif weekday == 3 and now.hour == 0:
+        # Donnerstag kurz nach Mitternacht – Fenster gerade geschlossen
+        in_window = False
+
+    logger.info(f"Startup-Check: weekday={weekday}, hour={now.hour}, in_window={in_window}, monday_date={monday_date}")
+
+    if not in_window:
+        logger.info("Startup-Check: Außerhalb des Meldefensters, nichts zu tun.")
+        return
+
+    # Rennen prüfen
+    race = db.get_race_for_date(monday_date)
+    if not race:
+        logger.info(f"Startup-Check: Kein (wertbares) Rennen am {monday_date}.")
+        return
+
+    _current_race = race
+    logger.info(f"Startup-Check: Rennen gefunden – {race['race_number']} auf {race['track_name']}")
+
+    # Letzte Bot-Nachricht im Channel prüfen
+    last_msg = await get_last_bot_message(channel)
+
+    # Ist die Startmeldung bereits korrekt gepostet?
+    if last_msg and last_msg.embeds:
+        title = last_msg.embeds[0].title or ""
+        if "Incident-Meldung geöffnet" in title:
+            logger.info("Startup-Check: Startmeldung bereits im Channel, setze _report_open=True.")
+            _report_open = True
+            return
+        if "Meldefrist abgelaufen" in title:
+            logger.info("Startup-Check: Abschlussmeldung bereits im Channel, nichts zu tun.")
+            return
+
+    # Noch keine passende Nachricht – Ergebnisse prüfen und Fenster öffnen
+    logger.info("Startup-Check: Keine passende Nachricht im Channel, prüfe Ergebnisse.")
+    try:
+        grid_count = sheets.get_grid_count()
+        complete = sheets.check_results_complete(race["race_number"], grid_count)
+    except Exception as e:
+        logger.error(f"Startup-Check: Fehler beim Ergebnis-Check: {e}")
+        complete = False
+
+    await open_report_window(results_found=complete)
+
+    # Falls Ergebnisse noch fehlen, Check-Loop starten
+    if not complete and not check_results_loop.is_running():
+        logger.info("Startup-Check: Ergebnisse unvollständig, starte Check-Loop.")
+        check_results_loop.start()
+
+
 # ─── Bot Events ───────────────────────────────────────────────────────────────
 
 @bot.event
@@ -542,6 +640,9 @@ async def on_ready():
         scheduler_thursday.start()
 
     logger.info("Scheduler gestartet.")
+
+    # Startup-Check asynchron starten
+    bot.loop.create_task(startup_check())
 
 
 # ─── Start ────────────────────────────────────────────────────────────────────
